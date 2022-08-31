@@ -1,0 +1,28 @@
+{
+  "name": "crisium-mining",
+  "version": "1.0.0",
+  "description": "Contracts for mining Crisium",
+  "main": "truffle-config.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CrisiumDev/crisium-mining.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/CrisiumDev/crisium-mining/issues"
+  },
+  "homepage": "https://github.com/CrisiumDev/crisium-mining#readme",
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.7.3"
+  },
+  "devDependencies": {
+    "@openzeppelin/test-helpers": "^0.5.15"
+  }
+}
