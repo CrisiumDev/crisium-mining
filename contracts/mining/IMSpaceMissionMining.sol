@@ -21,7 +21,8 @@ interface NFT {
  *
  * Mining rate is controlled externally, via an IERC20Faucet; any funds received
  * are proportionally divided among all staked users according to the total
- * mining power of their staked missions. For consistency, the
+ * mining power of their staked missions. For consistency, this contract implements
+ * the IERC20Faucet interface for querying or retrieving rewards.
  */
 contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IERC20Faucet {
     uint256 private constant MAX_256 = 2**256 - 1;
@@ -31,13 +32,14 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
     uint256 public constant MAX_PAYLOADS = 8;
 
-    /// @notice Info of each mission staking user.
+    /// @notice Info of each user who is or has previously staked a mission
     struct UserInfo {
         uint256 miningPower;
         uint256 released;
         int256 rewardDebt;
     }
 
+    /// @notice Info of mission that is or has been staked
     struct MissionInfo {
         bool staked;
         address user;
@@ -51,16 +53,20 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
     /// @notice Address of Crisium token contract.
     address public immutable token;
-    uint256 public _totalMined;   // totalMined() includes to-be-received from faucet
+    uint256 private _totalMined;   // totalMined() includes to-be-received from faucet
+    /// @notice Total amount of Crisium released to miners
     uint256 public override totalReleased;
 
-    /// @notice Inforamtion about ongoing mining
+    /// @notice Accumulated reward per unit of Mining Power
     uint256 public accRewardPerMP;
+    /// @notice Total Mining Power currently staked
     uint256 public totalMiningPower;
 
-    /// @notice Addresses of mission tokens
+    /// @notice Address of the Lander NFT
     address public landerToken;
+    /// @notice Address of the Landing Site NFT
     address public landingSiteToken;
+    /// @notice Address of the Payload NFT
     address public payloadToken;
 
     /// @notice Address of originating faucet
@@ -74,8 +80,9 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     /// @notice Mission IDs currently staked by each user
     mapping (address => uint256[]) public userMissions;
 
-    // @notice Info of each mission
+    /// @notice Info of each mission
     MissionInfo[] public missionInfo;
+    /// @notice Info of each currently staked mission
     uint256[] public stakedMissions;
 
     event MissionLaunched(address user, uint256 indexed missionId, address indexed to, uint256 miningPower);
@@ -102,6 +109,10 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     // *******************************
     // IERC20 Faucet Implementation
 
+    /**
+     * @notice The total quantity of tokens mined from this contract, so far.
+     * Includes tokens not yet released, and those available from the source faucet.
+     */
     function totalMined() external view returns (uint256 amount) {
         amount = _totalMined;
         if (!paused() && totalMiningPower > 0) {
@@ -109,6 +120,9 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         }
     }
 
+    /**
+     * @notice The quantity of mining token rewards released for the indicated mining user.
+     */
     function released(address _user) external view override returns (uint256 amount) {
         amount = userInfo[_user].released;
     }
@@ -128,6 +142,13 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         amount = uint256(int256((user.miningPower * rewardPerMP) / PRECISION) - user.rewardDebt);
     }
 
+    /**
+     * @notice Release mining rewards from the indicated user, sending them `to`
+     * the specified address.
+     *
+     * Condition: the caller must be `from`. This function signature is derived
+     * from the IERC20Faucet interface.
+     */
     function release(address from, address to) external override returns (uint256 amount) {
         require(_msgSender() == from, "IMSpaceMissionMining: not authorized");
         update();
@@ -140,6 +161,13 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         _release(user, from, to, amount);
     }
 
+    /**
+     * @notice Release mining rewards from the indicated user, sending them `to`
+     * the specified address.
+     *
+     * Condition: the caller must be `from`. This function signature is derived
+     * from the IERC20Faucet interface.
+     */
     function release(address from, address to, uint256 amount) external override {
         require(_msgSender() == from, "IMSpaceMissionMining: not authorized");
         update();
@@ -169,6 +197,13 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     // *******************************
     // Manager Controls
 
+    /**
+     * @notice Transfer any "excess" funds to the specified address. Any tokens
+     * received by this contract from sources other than the faucet, or released
+     * from the faucet while no users were mining, are considered "excess".
+     *
+     * Only the managers may make this call.
+     */
     function transferExcess(address to) external onlyManager {
         update();
 
@@ -180,35 +215,81 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         _transfer(to, amount);
     }
 
+    /**
+     * @notice Set the Lander token address. May only be called once, and only
+     * by a manager.
+     */
     function setMissionLanderToken(address _token) external onlyManager onlyUnset(landerToken) {
         landerToken = _token;
     }
 
+    /**
+     * @notice Set the Landing Site token address. May only be called once, and only
+     * by a manager.
+     */
     function setMissionLandingSiteToken(address _token) external onlyManager onlyUnset(landingSiteToken) {
         landingSiteToken = _token;
     }
 
+    /**
+     * @notice Set the Payload token address. May only be called once, and only
+     * by a manager.
+     */
     function setMissionPayloadToken(address _token) external onlyManager onlyUnset(payloadToken) {
         payloadToken = _token;
     }
 
+    /**
+     * @notice Updates the INFTAppraiser address, used to assess the value of staked
+     * mission components. Only callable by a manager. Does not automatically update
+     * the mining power of currently-staked missions.
+     */
     function setAppraiser(INFTAppraiser _appraiser) external onlyManager {
         address previousAppraiser = address(appraiser);
         appraiser = _appraiser;
         emit MissionAppraiserChanged(previousAppraiser, address(appraiser));
     }
 
+    /**
+     * @notice Updates the mining power multiplier applied to "complete" missions,
+     * those which have at least one of each component type. Only callable by a manager.
+     * Does not automatically update the mining power of currently-staked missions.
+     */
     function setMissionCompleteMultiplier(uint256 numerator, uint256 denominator) external onlyManager {
         require(numerator >= denominator, "IMSpaceMissionMining: ratio not >= 1");
         completeMissionMultiplierPrec = (numerator * PRECISION) / denominator;
         emit MissionCompleteMultiplierUpdated(numerator, denominator);
     }
 
+    /**
+     * @notice Pauses mining.
+     *
+     * Effects: no additional reward tokens will be accumulated by this contract
+     * while paused, although any rewards accumulated up to this point will remain
+     * retrievable. While paused, new missions cannot be staked; however, any
+     * already staked mission may be recalled or reappraised.
+     *
+     * Intended use: when adjusting mining power (by changes to the INFTAppraiser
+     * or complete mission multiplier) pause mining, make the necessary changes
+     * and `reappraiseMission` for all staked missions, then unpause.
+     *
+     * Only callable by a manager.
+     */
     function pause() external onlyManager {
         update();
         _pause();
     }
 
+    /**
+     * @notice Unpauses mining.
+     *
+     * Effects: any mining reward accumulating during the paused state will become
+     * retrievable (as if mining had continued during pause), divided proportionally
+     * based on current mining power (not mining power at time of pause). New missions
+     * again become launchable.
+     *
+     * Only callable by a manager.
+     */
     function unpause() external onlyManager {
         _unpause();
         update();
@@ -227,19 +308,22 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     // *******************************
     // Missions
 
-    /// @notice Returns the number of RMP pools.
+    /// @notice Returns the number of missions launched (length of  `missionInfo`).
     function missionCount() external view returns (uint256 missions) {
         missions = missionInfo.length;
     }
 
+    /// @notice Returns the number of missions currently staked (length of `stakedMissions`).
     function stakedMissionCount() external view returns (uint256 missions) {
         missions = stakedMissions.length;
     }
 
+    /// @notice Returns the number of missions staked by the indicated user (length of `userMissions`).
     function userMissionCount(address user) external view returns (uint256 missions) {
         missions = userMissions[user].length;
     }
 
+    /// @notice Returns the tokenIds comprising the indicated mission
     function missionTokens(uint256 missionId) external view returns (uint256[] memory landers, uint256[] memory landingSites, uint256[] memory payloads) {
         MissionInfo storage mission = missionInfo[missionId];
 
@@ -270,6 +354,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         }
     }
 
+    /// @notice Update internal state, pulling tokens from the faucet if appropriate.
     function update() public {
         if (!paused() && faucet.releasable(address(this)) > 0) {
             uint256 mined = faucet.release(address(this), address(this));
@@ -281,6 +366,11 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         }
     }
 
+    /**
+     * @notice Evaluate a candidate mission for staking. Returns a tuple giving
+     * whether the speciied set of tokens represents a valid mission, and its
+     * mining power if staked.
+     */
     function evaluateMissionCandidate(uint256[] calldata landers, uint256[] calldata landingSites, uint256[] calldata payloads) public view returns (bool valid, uint256 miningPower) {
         // valid missions: must have exactly one lander, 0-1 landing sites, 0-n payloads.
         // any provided components must have a non-zero-address nft token.
@@ -317,7 +407,15 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         }
     }
 
-    function reappraiseMission(uint256 missionId) external {
+    /**
+     * @notice Updates the appraised mining power of the indicated (staked) mission.
+     * Has no effect if component appraisals and complete mission multiplier are
+     * unchanged.
+     *
+     * Examine the return value or the emitted `MissionAppraised` event to determine
+     * the newly appraised mission mining power.
+     */
+    function reappraiseMission(uint256 missionId) external returns (uint256 miningPower) {
         MissionInfo storage mission = missionInfo[missionId];
         UserInfo storage user = userInfo[mission.user];
 
@@ -325,14 +423,14 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         update();
 
-        uint256 appraisal = _getMissionAppraisal(mission);
+        uint256 miningPower = _getMissionAppraisal(mission);
         uint256 previousAppraisal = mission.miningPower;
-        int256 appraisalChange = int256(appraisal) - int256(previousAppraisal);
+        int256 appraisalChange = int256(miningPower) - int256(previousAppraisal);
 
-        user.miningPower = (user.miningPower + appraisal) - previousAppraisal;
+        user.miningPower = (user.miningPower + miningPower) - previousAppraisal;
         user.rewardDebt += (appraisalChange * int256(accRewardPerMP)) / int256(PRECISION);
 
-        mission.miningPower = appraisal;
+        mission.miningPower = miningPower;
         totalMiningPower = uint256(int256(totalMiningPower) + appraisalChange);
         emit MissionAppraised(missionId, mission.user, previousAppraisal, appraisal);
     }
@@ -356,6 +454,18 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         }
     }
 
+    /**
+     * @notice Launch a new mining mission! The provided tokenIds will be transferred
+     * from the user's wallet into this contract. The mission will be credited
+     * to user `to` (typically the message sender) who will have the ability
+     * to harvest rewards and recall the mission.
+     *
+     * After this call the mining power of the launched misssion will be added
+     * to `to`'s record and immediately applied to future mining rewards.
+     *
+     * Examine the return value and/or emitted MissionLaunched event to find the
+     * new mission's missionId.
+     */
     function launchMission(uint256[] calldata landers, uint256[] calldata landingSites, uint256[] calldata payloads, address to) external whenNotPaused returns (uint256 missionId) {
         update();
 
@@ -392,6 +502,12 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         emit MissionLaunched(_msgSender(), missionId, to, miningPower);
     }
 
+    /**
+     * Recall the indicated mission, unstaking it for mining. The mission tokens
+     * will be transferred to `to`, usually the message sender. After this call
+     * the mission will no longer accumulate mining rewards, but already-mined
+     * rewards remain retrievable.
+     */
     function recallMission(uint256 missionId, address to) external {
         MissionInfo storage mission = missionInfo[missionId];
         UserInfo storage user = userInfo[mission.user];
