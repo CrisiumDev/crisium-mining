@@ -41,14 +41,20 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
     /// @notice Info of mission that is or has been staked
     struct MissionInfo {
-        bool staked;
+        // mission details
         address user;
         uint256 miningPower;
-        uint256 userMissionsIndex;
-        uint256 stakedMissionsIndex;
         uint256[] landers;
         uint256[] landingSites;
         uint256[] payloads;
+        uint256 userMissionsIndex;
+        uint256 stakedMissionsIndex;
+        // staking status
+        bool staked;
+        uint256 stakedBlock;
+        uint256 stakedTime;
+        uint256 unstakedBlock;
+        uint256 unstakedTime;
     }
 
     /// @notice Address of Crisium token contract.
@@ -323,7 +329,27 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         missions = userMissions[user].length;
     }
 
+    /// @notice Returns the status of the mission: owner, mining power, staking status
+    /// and staking period.
+    /// @param user The user who staked this mission
+    /// @param miningPower The mining power of this mission, as of its last audit
+    /// @param staked Is the mission currently staked? Missions cannot be re-staked;
+    ///   once unstaked, the same tokens restaked will be designated as a new mission.
+    /// @param stakeDuration The number of seconds which this mission has been staked.
+    ///   If `staked`, this number continuously increases; otherwise it becomes fixed.
+    function missionStatus(uint256 missionId) external view returns (address user, uint256 miningPower, bool staked, uint256 stakeDuration) {
+        MissionInfo storage mission = missionInfo[missionId];
+
+        user = mission.user;
+        miningPower = mission.miningPower;
+        staked = mission.staked;
+        stakeDuration = (mission.staked ? block.timestamp : mission.unstakedTime) - mission.stakedTime;
+    }
+
     /// @notice Returns the tokenIds comprising the indicated mission
+    /// @param landers tokenIds for lander tokens staked in the mission
+    /// @param landingSites tokenIds for landing site tokens staked in the mission
+    /// @param payloads tokenIds for payload tokens stsaked in the mission
     function missionTokens(uint256 missionId) external view returns (uint256[] memory landers, uint256[] memory landingSites, uint256[] memory payloads) {
         MissionInfo storage mission = missionInfo[missionId];
 
@@ -415,7 +441,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
      * Examine the return value or the emitted `MissionAppraised` event to determine
      * the newly appraised mission mining power.
      */
-    function reappraiseMission(uint256 missionId) external returns (uint256 miningPower) {
+    function reappraiseMission(uint256 missionId) external returns (uint256 appraisal) {
         MissionInfo storage mission = missionInfo[missionId];
         UserInfo storage user = userInfo[mission.user];
 
@@ -423,14 +449,14 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         update();
 
-        uint256 miningPower = _getMissionAppraisal(mission);
+        appraisal = _getMissionAppraisal(mission);
         uint256 previousAppraisal = mission.miningPower;
-        int256 appraisalChange = int256(miningPower) - int256(previousAppraisal);
+        int256 appraisalChange = int256(appraisal) - int256(previousAppraisal);
 
-        user.miningPower = (user.miningPower + miningPower) - previousAppraisal;
+        user.miningPower = (user.miningPower + appraisal) - previousAppraisal;
         user.rewardDebt += (appraisalChange * int256(accRewardPerMP)) / int256(PRECISION);
 
-        mission.miningPower = miningPower;
+        mission.miningPower = appraisal;
         totalMiningPower = uint256(int256(totalMiningPower) + appraisalChange);
         emit MissionAppraised(missionId, mission.user, previousAppraisal, appraisal);
     }
@@ -475,14 +501,20 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         // Make a mission
         missionId = missionInfo.length;
         missionInfo.push(MissionInfo({
-            staked: true,
+            // mission details
             user: to,
             miningPower: miningPower,
             userMissionsIndex: userMissions[to].length,
             stakedMissionsIndex: stakedMissions.length,
             landers: landers,
             landingSites: landingSites,
-            payloads: payloads
+            payloads: payloads,
+            // staking status
+            staked: true,
+            stakedBlock: block.number,
+            stakedTime: block.timestamp,
+            unstakedBlock: 0,
+            unstakedTime: 0
         }));
         stakedMissions.push(missionId);
         userMissions[to].push(missionId);
@@ -523,6 +555,8 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         user.miningPower -= missionPower;
         totalMiningPower -= missionPower;
         mission.staked = false;
+        mission.unstakedBlock = block.number;
+        mission.unstakedTime = block.timestamp;
 
         // cleanup user mission list and mission record
         {
