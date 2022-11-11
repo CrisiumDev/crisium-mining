@@ -71,6 +71,13 @@ module.exports = {
     // network_id: 2111,   // This network is yours, in the cloud.
     // production: true    // Treats this network as if it was a public net. (default: false)
     // }
+
+    test: {
+      host: "127.0.0.1",
+      port: 54603,
+      network_id: "*", // Match any network id
+      gas: 6700000
+    },
   },
 
   // Set default mocha options here, use special reporters etc.
@@ -100,7 +107,7 @@ module.exports = {
   // NOTE: It is not possible to migrate your contracts to truffle DB and you should
   // make a backup of your artifacts to a safe location before enabling this feature.
   //
-  // After you backed up your artifacts you can utilize db by running migrate as follows: 
+  // After you backed up your artifacts you can utilize db by running migrate as follows:
   // $ truffle migrate --reset --compile-all
   //
   // db: {
@@ -113,4 +120,8 @@ module.exports = {
     //   }
     // }
   // }
+
+  plugins: [
+    'truffle-contract-size'
+  ]
 };

@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.10;
 
-
 import "@openzeppelin/contracts/access/AccessControlEnumerable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/utils/Context.sol";
+import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "../faucet/IERC20Faucet.sol";
-import "../faucet/IERC20Token.sol";
 import "../appraisal/INFTAppraiser.sol";
 
-interface NFT {
+interface IERC721Token {
     function transferFrom(address from, address to, uint256 tokenId) external;
+}
+
+interface IERC20Token {
+    function transfer(address to, uint256 amount) external returns (bool);
+    function balanceOf(address owner) external view returns (uint256);
 }
 
 /**
@@ -25,7 +29,9 @@ interface NFT {
  * the IERC20Faucet interface for querying or retrieving rewards.
  */
 contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IERC20Faucet {
-    uint256 private constant MAX_256 = 2**256 - 1;
+    using SafeCast for uint256;
+    using SafeCast for int256;
+
     uint256 private constant PRECISION = 1e20;
 
     // Role capable of withdrawing excess funds and set token addresses
@@ -105,6 +111,9 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         faucet = _faucet;
         appraiser = _appraiser;
 
+        // require a contract for _token, as low-level "call" is used
+        require(_token.code.length > 0, "IMSpaceMissionMining: _token not a contract");
+
         // set up roles
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());   // admin; can add/remove managers
         _setupRole(MANAGER_ROLE, _msgSender());         // manager; can withdraw excess funds
@@ -145,7 +154,9 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
             rewardPerMP += (additionalReward * PRECISION) / totalMiningPower;
         }
 
-        amount = uint256(int256((user.miningPower * rewardPerMP) / PRECISION) - user.rewardDebt);
+        amount = (
+            ((user.miningPower * rewardPerMP) / PRECISION).toInt256() - user.rewardDebt
+        ).toUint256();
     }
 
     /**
@@ -161,8 +172,9 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         // calculate reward pending
         UserInfo storage user = userInfo[from];
-        int256 accumulatedReward = int256((user.miningPower * accRewardPerMP)  / PRECISION);
-        amount = uint256(accumulatedReward - user.rewardDebt);
+        amount = (
+            ((user.miningPower * accRewardPerMP)  / PRECISION).toInt256() - user.rewardDebt
+        ).toUint256();
 
         _release(user, from, to, amount);
     }
@@ -180,8 +192,9 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         // calculate reward pending
         UserInfo storage user = userInfo[from];
-        uint256 accumulatedReward = (user.miningPower * accRewardPerMP)  / PRECISION;
-        uint256 pendingReward = uint256(int256(accumulatedReward) - user.rewardDebt);
+        uint256 pendingReward = (
+            ((user.miningPower * accRewardPerMP)  / PRECISION).toInt256() - user.rewardDebt
+        ).toUint256();
 
         require(amount <= pendingReward, "IMSpaceMissionMining: amount > releasable");
         _release(user, from, to, amount);
@@ -189,12 +202,12 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
     function _release(UserInfo storage user, address from, address to, uint256 amount) internal {
         // update internal records
-        user.rewardDebt += int256(amount);
+        user.rewardDebt += amount.toInt256();
         user.released += amount;
         totalReleased += amount;
 
         if (amount > 0) {
-            _transfer(to, amount);
+            _safeTransfer(to, amount);
         }
 
         emit Released(from, to, amount);
@@ -218,7 +231,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         // allocate funds before any's mission tokens are staked
         uint256 balance = IERC20Token(token).balanceOf(address(this));
         uint256 amount = (balance + totalReleased) - _totalMined;
-        _transfer(to, amount);
+        _safeTransfer(to, amount);
     }
 
     /**
@@ -376,7 +389,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
     function _transferNFTs(address nftToken, uint256[] storage tokenIds, address from, address to) internal {
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            NFT(nftToken).transferFrom(from, to, tokenIds[i]);
+            IERC721Token(nftToken).transferFrom(from, to, tokenIds[i]);
         }
     }
 
@@ -451,13 +464,13 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         appraisal = _getMissionAppraisal(mission);
         uint256 previousAppraisal = mission.miningPower;
-        int256 appraisalChange = int256(appraisal) - int256(previousAppraisal);
+        int256 appraisalChange = appraisal.toInt256() - previousAppraisal.toInt256();
 
         user.miningPower = (user.miningPower + appraisal) - previousAppraisal;
-        user.rewardDebt += (appraisalChange * int256(accRewardPerMP)) / int256(PRECISION);
+        user.rewardDebt += (appraisalChange * accRewardPerMP.toInt256()) / PRECISION.toInt256();
 
         mission.miningPower = appraisal;
-        totalMiningPower = uint256(int256(totalMiningPower) + appraisalChange);
+        totalMiningPower = (totalMiningPower.toInt256() + appraisalChange).toUint256();
         emit MissionAppraised(missionId, mission.user, previousAppraisal, appraisal);
     }
 
@@ -524,7 +537,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         // Update mining power totals
         user.miningPower += miningPower;
-        user.rewardDebt += int256((miningPower * accRewardPerMP) / PRECISION);
+        user.rewardDebt += ((miningPower * accRewardPerMP) / PRECISION).toInt256();
         totalMiningPower += miningPower;
 
         // Transfer mission tokens
@@ -551,7 +564,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
 
         // unstake mission; update mining power
         uint256 missionPower = mission.miningPower;
-        user.rewardDebt = user.rewardDebt - int256((missionPower * accRewardPerMP) / PRECISION);
+        user.rewardDebt = user.rewardDebt - ((missionPower * accRewardPerMP) / PRECISION).toInt256();
         user.miningPower -= missionPower;
         totalMiningPower -= missionPower;
         mission.staked = false;
@@ -582,14 +595,39 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         emit MissionRecalled(_msgSender(), missionId, to, missionPower);
     }
 
-    /// @dev Transfer the indicated reward to the indicated recipient, or as
-    /// much of it as possible.
-    function _transfer(address _to, uint256 _amount) internal {
-        uint256 balance = IERC20Token(token).balanceOf(address(this));
-        if (_amount > balance) {
-            IERC20Token(token).transfer(_to, balance);
-        } else {
-            IERC20Token(token).transfer(_to, _amount);
+    /**
+     * @dev Wrapper around ERC20 `transfer` that throw on failure (when the token
+     * contract returns false). Tokens that return no value (and instead revert or
+     * throw on failure) are also supported, non-reverting calls are assumed to be
+     * successful.
+     *
+     * Modified from OpenZeppelin (Copyright (c) 2016-2022 zOS Global Limited and contributors
+     * under MIT license)'s Address and SafeERC20 implementations; optimized for
+     * size as only one such operation is needed.
+     */
+    function _safeTransfer(address to, uint256 amount) internal {
+        // encode transfer function
+        bytes memory data = abi.encodeWithSelector(IERC20Token(token).transfer.selector, to, amount);
+
+        // low-level invocation
+        (bool success, bytes memory returndata) = token.call{value: 0}(data);
+
+        // if unsuccessful, unpack error message
+        if (!success) {
+            if (returndata.length > 0) {
+                /// @solidity memory-safe-assembly
+                assembly {
+                    let returndata_size := mload(returndata)
+                    revert(add(32, returndata), returndata_size)
+                }
+            } else {
+                revert("SafeERC20: low-level call failed");
+            }
+        }
+
+        if (returndata.length > 0) {
+            // Return data is optional
+            require(abi.decode(returndata, (bool)), "SafeERC20: ERC20 operation did not succeed");
         }
     }
 }

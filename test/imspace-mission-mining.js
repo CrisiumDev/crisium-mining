@@ -671,6 +671,15 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             const { mining, landingSite } = this;
             let res;
 
+            // time-sensitive testing is iffy. Allow 1 second wiggle-room
+            const assertTimeEqual = (real, expected) => {
+                realStr = real.toString();
+                assert.ok(
+                  realStr == `${expected}` || realStr == `${expected + 1}`,
+                  `AssertionError: expected ${real} (as ${realStr}) to ~equal '${expected}'`
+                );
+            }
+
             await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
 
             await mining.launchMission([0], [], [], alice, { from:alice });
@@ -680,14 +689,16 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             assert.equal(res.user, alice)
             assert.equal(res.miningPower, '100')
             assert.equal(res.staked, true)
-            assert.equal(res.stakeDuration, '0')
+            assertTimeEqual(res.stakeDuration, 0)
+
+            // time-sensitive testing is iffy. Allow 1 second wiggle-room
 
             await time.increase(14)
             res = await mining.missionStatus(0);
             assert.equal(res.user, alice)
             assert.equal(res.miningPower, '100')
             assert.equal(res.staked, true)
-            assert.equal(res.stakeDuration, '14')
+            assertTimeEqual(res.stakeDuration, 14)
 
             await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
             const missionTime1 = await time.latest();
@@ -696,7 +707,7 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             assert.equal(res.user, alice)
             assert.equal(res.miningPower, '140')
             assert.equal(res.staked, true)
-            assert.equal(res.stakeDuration, '0')
+            assertTimeEqual(res.stakeDuration, 0)
 
             await time.increase(8)
             await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
@@ -706,7 +717,7 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             assert.equal(res.user, carol)
             assert.equal(res.miningPower, '180')
             assert.equal(res.staked, true)
-            assert.equal(res.stakeDuration, '0')
+            assertTimeEqual(res.stakeDuration, 0)
 
             await time.increase(20)
             await mining.launchMission([12], [], [], carol, { from:bob });
@@ -716,14 +727,14 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             assert.equal(res.user, carol)
             assert.equal(res.miningPower, '100')
             assert.equal(res.staked, true)
-            assert.equal(res.stakeDuration, '0')
+            assertTimeEqual(res.stakeDuration, 0)
 
             await time.increase(2)
             const t = await time.latest()
-            assert.equal((await mining.missionStatus(0)).stakeDuration, `${t - missionTime0}`)
-            assert.equal((await mining.missionStatus(1)).stakeDuration, `${t - missionTime1}`)
-            assert.equal((await mining.missionStatus(2)).stakeDuration, `${t - missionTime2}`)
-            assert.equal((await mining.missionStatus(3)).stakeDuration, `${t - missionTime3}`)
+            assertTimeEqual((await mining.missionStatus(0)).stakeDuration, t - missionTime0);
+            assertTimeEqual((await mining.missionStatus(1)).stakeDuration, t - missionTime1);
+            assertTimeEqual((await mining.missionStatus(2)).stakeDuration, t - missionTime2);
+            assertTimeEqual((await mining.missionStatus(3)).stakeDuration, t - missionTime3);
           });
 
           it('records transferred tokens in "missionTokens" response', async () => {

@@ -94,6 +94,7 @@ abstract contract BaseERC20Faucet is IERC20Faucet {
 
     /**
      * @dev Transfer `amount` tokens to address `to`.
+     * If the transfer cannot be made (e.g. because insufficient tokens are available)
      */
     function _transfer(address from, address to, uint256 amount) internal virtual;
 

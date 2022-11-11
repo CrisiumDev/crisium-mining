@@ -3,8 +3,9 @@
 
 pragma solidity 0.8.10;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../base/BaseERC20Faucet.sol";
-import "../IERC20Token.sol";
 
 /**
  * @title MockERC20Faucet
@@ -13,6 +14,7 @@ import "../IERC20Token.sol";
  * for ease of use).
  */
 contract MockERC20Faucet is BaseERC20Faucet {
+    using SafeERC20 for IERC20;
 
     address public override token;
     mapping(address => uint256) private _owed;
@@ -56,7 +58,7 @@ contract MockERC20Faucet is BaseERC20Faucet {
      */
     function _transfer(address from, address to, uint256 amount) internal override {
         _owed[from] -= amount;
-        IERC20Token(token).transfer(to, amount);
+        IERC20(token).safeTransfer(to, amount);
     }
 
     /**

@@ -3,8 +3,9 @@
 
 pragma solidity 0.8.10;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./BaseERC20Faucet.sol";
-import "../IERC20Token.sol";
 
 /**
  * @title BaseDripShareERC20Faucet
@@ -17,6 +18,7 @@ import "../IERC20Token.sol";
  * {fund}, which transfers tokens and simultaneously supdates internal bookkeeping.
  */
 abstract contract BaseDripShareERC20Faucet is BaseERC20Faucet {
+    using SafeERC20 for IERC20;
 
     uint256 private constant PRECISION = 1e20;
 
@@ -29,7 +31,7 @@ abstract contract BaseDripShareERC20Faucet is BaseERC20Faucet {
       uint256 activeRecipientsIndex;        // index into activeRecipients where this recipient is listed (if shares > 0)
     }
 
-    address public override token;
+    address public override immutable token;
     uint256 public tokensPerBlock;    // drip rate
 
     uint256 public totalShares;
@@ -61,7 +63,7 @@ abstract contract BaseDripShareERC20Faucet is BaseERC20Faucet {
         amount = _totalAllocated;
         if (totalShares > 0 && block.number > lastUpdateBlock) {
             amount += tokensPerBlock * (block.number - lastUpdateBlock);
-            uint256 available = IERC20Token(token).balanceOf(address(this)) + totalReleased();
+            uint256 available = IERC20(token).balanceOf(address(this)) + totalReleased();
             if (amount > available) {
                 amount = available;
             }
@@ -89,9 +91,7 @@ abstract contract BaseDripShareERC20Faucet is BaseERC20Faucet {
      */
     function _transfer(address from, address to, uint256 amount) internal override {
         _updateRecipient(from);
-
-        uint256 balance = IERC20Token(token).balanceOf(address(this));
-        IERC20Token(token).transfer(to, amount <= balance ? amount : balance);
+        IERC20(token).safeTransfer(to, amount);
     }
 
     function _update() internal override {

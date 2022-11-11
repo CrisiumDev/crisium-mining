@@ -28,6 +28,14 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * this function does not grant additional power to the Owner.
  */
 contract DripShareERC20Faucet is BaseDripShareERC20Faucet, Ownable {
+    using SafeERC20 for IERC20;
+
+    event Fund(address indexed from, uint256 amount);
+    event Defund(address indexed to, uint256 amount);
+    event StartBlockChange(uint256 startBlock);
+    event TokensPerBlockChange(uint256 previousTokensPerBlock, uint256 newTokensPerBlock);
+    event RecipientSharesChange(address indexed recipient, uint256 shares, uint256 totalShares);
+
     constructor(
         address _token,
         uint256 _tokensPerBlock,
@@ -47,22 +55,26 @@ contract DripShareERC20Faucet is BaseDripShareERC20Faucet, Ownable {
 
     function fund(address from, uint256 amount) external {
         _updateAll();
-        IERC20Token(token).transferFrom(from, address(this), amount);
+        IERC20(token).safeTransferFrom(from, address(this), amount);
+        emit Fund(from, amount);
     }
 
     function defund(address to) external onlyOwner {
-        uint256 funded = IERC20Token(token).balanceOf(address(this)) + totalReleased();
+        uint256 funded = IERC20(token).balanceOf(address(this)) + totalReleased();
         uint256 reserved = totalAllocated();
         if (funded > reserved) {
-            IERC20Token(token).transfer(to, funded - reserved);
+            uint256 amount = funded - reserved;
+            IERC20(token).safeTransfer(to, amount);
+            emit Defund(to, amount);
         }
     }
 
     function defund(address to, uint256 amount) external onlyOwner {
-        uint256 funded = IERC20Token(token).balanceOf(address(this)) + totalReleased();
+        uint256 funded = IERC20(token).balanceOf(address(this)) + totalReleased();
         uint256 reserved = totalAllocated();
         require(funded >= reserved + amount, "DripShareERC20Faucet: insufficient funds");
-        IERC20Token(token).transfer(to, amount);
+        IERC20(token).safeTransfer(to, amount);
+        emit Defund(to, amount);
     }
 
     /**
@@ -72,20 +84,51 @@ contract DripShareERC20Faucet is BaseDripShareERC20Faucet, Ownable {
      */
     function setStartBlock(uint256 startBlock) external onlyOwner {
         _setStartBlock(startBlock);
+        emit StartBlockChange(startBlock);
     }
 
     /**
      * @dev Set the drip rate: tokens per block.
      */
     function setTokensPerBlock(uint256 _tokensPerBlock) external onlyOwner {
+        uint256 prevValue = tokensPerBlock;
         _setTokensPerBlock(_tokensPerBlock);
+        emit TokensPerBlockChange(prevValue, _tokensPerBlock);
     }
 
     /**
      * @dev Set the recipients and shares.
      */
     function setRecipients(address[] memory recipients, uint256[] memory shares) external onlyOwner {
+        // note those to be removed
+        address[] memory removed = new address[](activeRecipients.length);
+        uint256 removedCount  = 0;
+        for (uint256 i = 0; i < activeRecipients.length; i++) {
+            address recipient = activeRecipients[i];
+            bool isRemoved = true;
+            for (uint256 j = 0; j < recipients.length && isRemoved; j++) {
+                if (recipients[j] == recipient && shares[j] > 0) {
+                    isRemoved = false;
+                }
+            }
+
+            if (isRemoved) {
+              removed[removedCount++] = recipient;
+            }
+        }
+
+        // update recipients
         _setRecipients(recipients, shares);
+
+        // emit events
+        for (uint256 i = 0; i < removedCount; i++) {
+            emit RecipientSharesChange(removed[i], 0, totalShares);
+        }
+        for (uint256 i = 0; i < activeRecipients.length; i++) {
+            address recipient = activeRecipients[i];
+            uint256 rShares = recipientInfo[recipient].shares;
+            emit RecipientSharesChange(recipient, rShares, totalShares);
+        }
     }
 
     /**
@@ -93,6 +136,7 @@ contract DripShareERC20Faucet is BaseDripShareERC20Faucet, Ownable {
      */
     function setRecipientShares(address recipient, uint256 shares) external onlyOwner {
         _setRecipientShares(recipient, shares);
+        emit RecipientSharesChange(recipient, shares, totalShares);
     }
 
     /**
