@@ -1,6 +1,7 @@
 const { expectRevert, expectEvent, time } = require('@openzeppelin/test-helpers');
 const NFTAppraisalRecord = artifacts.require('NFTAppraisalRecord');
 const IMSpaceMissionMining = artifacts.require('IMSpaceMissionMining');
+const MockMissionChecker = artifacts.require('MockMissionChecker');
 const MockERC20Faucet = artifacts.require('MockERC20Faucet');
 const MockERC20 = artifacts.require('MockERC20');
 const MockERC721 = artifacts.require('MockERC721');
@@ -60,12 +61,12 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
         await expectRevert(
           mining.transferExcess(alice, { from:alice }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.transferExcess(bob, { from:carol }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
       });
 
@@ -94,17 +95,17 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
         await expectRevert(
           mining.setMissionLanderToken(nft.address, { from:alice }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.setMissionLandingSiteToken(nft.address, { from:bob }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.setMissionPayloadToken(nft.address, { from:carol }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
       });
 
@@ -138,32 +139,32 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
         await mining.setMissionLanderToken(nft.address, { from:manager });
         await expectRevert(
           mining.setMissionLanderToken(alice, { from:manager }),
-          "IMSpaceMissionMining: already set"
+          "IMSMM: already set"
         );
         await expectRevert(
           mining.setMissionLanderToken(alice, { from:deployer }),
-          "IMSpaceMissionMining: already set"
+          "IMSMM: already set"
         );
 
         await mining.setMissionLandingSiteToken(nft.address, { from:deployer });
         await expectRevert(
           mining.setMissionLandingSiteToken(alice, { from:manager }),
-          "IMSpaceMissionMining: already set"
+          "IMSMM: already set"
         );
         await expectRevert(
           mining.setMissionLandingSiteToken(alice, { from:deployer }),
-          "IMSpaceMissionMining: already set"
+          "IMSMM: already set"
         );
 
         const nft2 = await MockERC721.new("Mission Component 2", "MC2");
         await mining.setMissionPayloadToken(nft2.address, { from:manager });
         await expectRevert(
           mining.setMissionPayloadToken(nft.address, { from:deployer }),
-          "IMSpaceMissionMining: already set"
+          "IMSMM: already set"
         );
         await expectRevert(
           mining.setMissionPayloadToken(alice, { from:manager }),
-          "IMSpaceMissionMining: already set"
+          "IMSMM: already set"
         );
       });
     });
@@ -180,12 +181,12 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
         await expectRevert(
           mining.setAppraiser(appraiser2.address, { from:alice }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.setAppraiser(appraiser2.address, { from:bob }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
       });
 
@@ -217,18 +218,95 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
       });
     });
 
+    context('setMissionCompleteChecker', () => {
+      let checker, checker2;
+
+      beforeEach(async () => {
+        checker = await MockMissionChecker.new();
+        checker2 = await MockMissionChecker.new();
+      });
+
+      it('reverts for non-manager', async () => {
+        const { mining } = this;
+
+        await expectRevert(
+          mining.setMissionCompleteChecker(checker.address, { from:alice }),
+          "IMSMM: !auth"
+        );
+
+        await expectRevert(
+          mining.setMissionCompleteChecker(checker.address, { from:bob }),
+          "IMSMM: !auth"
+        );
+      });
+
+      it('updates "completeMissionChecker"', async () => {
+        const { mining } = this;
+
+        await mining.setMissionCompleteChecker(checker.address, { from:manager });
+        assert.equal(await mining.completeMissionChecker(), checker.address);
+
+        await mining.setMissionCompleteChecker(checker2.address, { from:deployer });
+        assert.equal(await mining.completeMissionChecker(), checker2.address);
+
+        await mining.setMissionCompleteChecker(mining.address, { from:manager });
+        assert.equal(await mining.completeMissionChecker(), ADDRESS_ZERO);
+
+        await mining.setMissionCompleteChecker(checker2.address, { from:deployer });
+        assert.equal(await mining.completeMissionChecker(), checker2.address);
+
+        await mining.setMissionCompleteChecker(ADDRESS_ZERO, { from:manager });
+        assert.equal(await mining.completeMissionChecker(), ADDRESS_ZERO);
+      });
+
+      it('emits "MissionAppraiserChanged"', async () => {
+        const { mining, appraiser } = this;
+        let res;
+
+        res = await mining.setMissionCompleteChecker(checker.address, { from:manager });
+        await expectEvent.inTransaction(res.tx, mining, "MissionCompleteCheckerChanged", {
+          previousChecker: ADDRESS_ZERO,
+          checker: checker.address
+        });
+
+        res = await mining.setMissionCompleteChecker(checker2.address, { from:deployer });
+        await expectEvent.inTransaction(res.tx, mining, "MissionCompleteCheckerChanged", {
+          previousChecker: checker.address,
+          checker: checker2.address
+        });
+
+        res = await mining.setMissionCompleteChecker(mining.address, { from:manager });
+        await expectEvent.inTransaction(res.tx, mining, "MissionCompleteCheckerChanged", {
+          previousChecker: checker2.address,
+          checker: ADDRESS_ZERO
+        });
+
+        res = await mining.setMissionCompleteChecker(checker2.address, { from:deployer });
+        await expectEvent.inTransaction(res.tx, mining, "MissionCompleteCheckerChanged", {
+          previousChecker: ADDRESS_ZERO,
+          checker: checker2.address
+        });
+
+        res = await mining.setMissionCompleteChecker(ADDRESS_ZERO, { from:manager });
+        await expectEvent.inTransaction(res.tx, mining, "MissionCompleteCheckerChanged", {
+          previousChecker: checker2.address,
+          checker: ADDRESS_ZERO
+        });
+      });
+    });
+
     context('setMissionCompleteMultiplier', () => {
       it('reverts for non-manager', async () => {
         const { mining } = this;
 
         await expectRevert(
           mining.setMissionCompleteMultiplier(10, 1, { from:alice }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.setMissionCompleteMultiplier(1, 1, { from:bob }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
       });
 
@@ -237,12 +315,12 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
         await expectRevert(
           mining.setMissionCompleteMultiplier(999, 1000, { from:manager }),
-          "IMSpaceMissionMining: ratio not >= 1"
+          "IMSMM: ratio not >= 1"
         );
 
         await expectRevert(
           mining.setMissionCompleteMultiplier(1, 1000, { from:deployer }),
-          "IMSpaceMissionMining: ratio not >= 1"
+          "IMSMM: ratio not >= 1"
         );
       });
 
@@ -270,24 +348,24 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
         await expectRevert(
           mining.pause({ from:alice }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.pause({ from:bob }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await mining.pause({ from:manager });
 
         await expectRevert(
           mining.unpause({ from:alice }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await expectRevert(
           mining.unpause({ from:bob }),
-          "IMSpaceMissionMining: not authorized"
+          "IMSMM: !auth"
         );
 
         await mining.unpause({ from:manager });
@@ -416,6 +494,173 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
           assert.equal(res.miningPower, '16855');
         });
 
+        context('with completeMissionChecker', () => {
+          let checker;
+
+          beforeEach(async () => {
+            const { mining } = this;
+
+            checker = await MockMissionChecker.new();
+            await mining.setMissionCompleteChecker(checker.address, { from:deployer });
+          });
+
+          it('valid, incomplete mission, checked as incomplete', async () => {
+            const { mining, lander, landingSite, payload, appraiser } = this;
+            let res;
+
+            await mining.setMissionCompleteMultiplier(3, 2, { from:deployer });   // 150%
+
+            // note: the appraiser does not actually check for token existence; any tokenId
+            // will provide default appraisal
+            res = await mining.evaluateMissionCandidate([0], [], []);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '100');
+
+            res = await mining.evaluateMissionCandidate([10], [], [1, 2, 3]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '130');
+
+            // with some non-default values
+            await appraiser.setAppraisals(lander.address, [1, 2, 3], [1000, 2000, 3000], { from:deployer });
+            await appraiser.setAppraisals(payload.address, [1, 2, 3, 4, 5], [10, 20, 30, 40, 50], { from:deployer });
+
+            res = await mining.evaluateMissionCandidate([1], [], []);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '1000');
+
+            res = await mining.evaluateMissionCandidate([2], [], [2, 4]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '2060');
+
+            res = await mining.evaluateMissionCandidate([3], [], [1, 2, 3, 5, 6]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '3120');
+
+            await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+            res = await mining.evaluateMissionCandidate([1], [], []);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '1000');
+
+            res = await mining.evaluateMissionCandidate([2], [], [2, 4]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '2060');
+
+            res = await mining.evaluateMissionCandidate([3], [], [1, 2, 3, 5, 6]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '3120');
+          });
+
+          it('valid, incomplete mission, checked as complete', async () => {
+            const { mining, lander, landingSite, payload, appraiser } = this;
+            let res;
+
+            await mining.setMissionCompleteMultiplier(3, 2, { from:deployer });   // 150%
+            await checker.setResult(true);
+
+            // note: the appraiser does not actually check for token existence; any tokenId
+            // will provide default appraisal
+            res = await mining.evaluateMissionCandidate([0], [], []);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '150');
+
+            res = await mining.evaluateMissionCandidate([10], [], [1, 2, 3]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '195');
+
+            // with some non-default values
+            await appraiser.setAppraisals(lander.address, [1, 2, 3], [1000, 2000, 3000], { from:deployer });
+            await appraiser.setAppraisals(payload.address, [1, 2, 3, 4, 5], [10, 20, 30, 40, 50], { from:deployer });
+
+            res = await mining.evaluateMissionCandidate([1], [], []);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '1500');
+
+            res = await mining.evaluateMissionCandidate([2], [], [2, 4]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '3090');
+
+            res = await mining.evaluateMissionCandidate([3], [], [1, 2, 3, 5, 6]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '4680');
+
+            await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+            res = await mining.evaluateMissionCandidate([1], [], []);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '1500');
+
+            res = await mining.evaluateMissionCandidate([2], [], [2, 4]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '3090');
+
+            res = await mining.evaluateMissionCandidate([3], [], [1, 2, 3, 5, 6]);
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '4680');
+          });
+
+          it('complete mission, checked as incomplete', async () => {
+            const { mining, lander, landingSite, payload, appraiser } = this;
+            let res;
+
+            await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+            await mining.setMissionCompleteMultiplier(3, 2, { from:deployer });   // 150%
+
+            res = await mining.evaluateMissionCandidate([0], [0], [0]); // (100 + 50 + 10)
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '160');
+
+            res = await mining.evaluateMissionCandidate([10], [20], [1, 2, 3, 4]); // (100 + 50 + 40)
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '190');
+
+            // with some non-default values
+            await appraiser.setAppraisals(lander.address, [1, 2, 3], [1000, 2000, 3000], { from:deployer });
+            await appraiser.setAppraisals(landingSite.address, [1, 2, 3], [10000, 20000, 30000], { from:deployer });
+            await appraiser.setAppraisals(payload.address, [1, 2, 3, 4, 5], [10, 20, 30, 40, 50], { from:deployer });
+
+            res = await mining.evaluateMissionCandidate([2], [3], [1, 2, 3]); // (2000 + 30000 + 60)
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '32060');
+
+            await mining.setMissionCompleteMultiplier(9, 7, { from:deployer });   // 128.5714%
+            res = await mining.evaluateMissionCandidate([3], [1], [1, 4, 5, 10]); // (3000 + 10000 + 110)
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '13110');
+          });
+
+          it('complete mission, checked as complete', async () => {
+            const { mining, lander, landingSite, payload, appraiser } = this;
+            let res;
+
+            await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+            await mining.setMissionCompleteMultiplier(3, 2, { from:deployer });   // 150%
+            await checker.setResult(true);
+
+            res = await mining.evaluateMissionCandidate([0], [0], [0]); // (100 + 50 + 10) * 1.5
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '240');
+
+            res = await mining.evaluateMissionCandidate([10], [20], [1, 2, 3, 4]); // (100 + 50 + 40) * 1.5
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '285');
+
+            // with some non-default values
+            await appraiser.setAppraisals(lander.address, [1, 2, 3], [1000, 2000, 3000], { from:deployer });
+            await appraiser.setAppraisals(landingSite.address, [1, 2, 3], [10000, 20000, 30000], { from:deployer });
+            await appraiser.setAppraisals(payload.address, [1, 2, 3, 4, 5], [10, 20, 30, 40, 50], { from:deployer });
+
+            res = await mining.evaluateMissionCandidate([2], [3], [1, 2, 3]); // (2000 + 30000 + 60) * 1.5
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '48090');
+
+            await mining.setMissionCompleteMultiplier(9, 7, { from:deployer });   // 128.5714%
+            res = await mining.evaluateMissionCandidate([3], [1], [1, 4, 5, 10]); // (3000 + 10000 + 110) * 1.285714
+            assert.equal(res.valid, true);
+            assert.equal(res.miningPower, '16855');
+          });
+        });
+
         it('invalid mission', async () => {
           const { mining, lander, landingSite, payload, appraiser } = this;
           let res;
@@ -495,34 +740,34 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             const { mining, landingSite } = this;
             await expectRevert(
               mining.launchMission([], [], [1], alice, { from:alice }),
-              "IMSpaceMissionMining: invalid mission"
+              "IMSMM: invalid mission"
             );
 
             await expectRevert(
               mining.launchMission([1, 2], [], [1], alice, { from:alice }),
-              "IMSpaceMissionMining: invalid mission"
+              "IMSMM: invalid mission"
             );
 
             await expectRevert(
               mining.launchMission([1], [0], [], alice, { from:alice }),
-              "IMSpaceMissionMining: invalid mission"
+              "IMSMM: invalid mission"
             );
 
             await expectRevert(
               mining.launchMission([2], [], [1, 2, 3, 4, 5, 6, 7, 8, 9], alice, { from:alice }),
-              "IMSpaceMissionMining: invalid mission"
+              "IMSMM: invalid mission"
             );
 
             await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
 
             await expectRevert(
               mining.launchMission([], [1], [], alice, { from:alice }),
-              "IMSpaceMissionMining: invalid mission"
+              "IMSMM: invalid mission"
             );
 
             await expectRevert(
               mining.launchMission([2], [1, 2], [], alice, { from:alice }),
-              "IMSpaceMissionMining: invalid mission"
+              "IMSMM: invalid mission"
             );
           });
 
@@ -903,6 +1148,446 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             assert.equal(mission.userMissionsIndex, '1');
             assert.equal(mission.miningPower, '100');
           });
+
+          context('with complete checker evaluating missions', () => {
+            let checker;
+
+            beforeEach(async () => {
+              const { mining } = this;
+              checker = await MockMissionChecker.new();
+              await mining.setMissionCompleteChecker(checker.address, { from:manager });
+              await mining.setMissionCompleteMultiplier(3, 2, { from:manager });  // 150%
+            });
+
+            it('reverts for invalid missions', async () => {
+              const { mining, landingSite } = this;
+              await expectRevert(
+                mining.launchMission([], [], [1], alice, { from:alice }),
+                "IMSMM: invalid mission"
+              );
+
+              await expectRevert(
+                mining.launchMission([1, 2], [], [1], alice, { from:alice }),
+                "IMSMM: invalid mission"
+              );
+
+              await expectRevert(
+                mining.launchMission([1], [0], [], alice, { from:alice }),
+                "IMSMM: invalid mission"
+              );
+
+              await checker.setResult(true);
+
+              await expectRevert(
+                mining.launchMission([2], [], [1, 2, 3, 4, 5, 6, 7, 8, 9], alice, { from:alice }),
+                "IMSMM: invalid mission"
+              );
+
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await expectRevert(
+                mining.launchMission([], [1], [], alice, { from:alice }),
+                "IMSMM: invalid mission"
+              );
+
+              await expectRevert(
+                mining.launchMission([2], [1, 2], [], alice, { from:alice }),
+                "IMSMM: invalid mission"
+              );
+            });
+
+            it('reverts for nonexistent tokens', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              await expectRevert.unspecified(
+                mining.launchMission([30], [], [], alice, { from:alice })
+              );
+
+              await expectRevert.unspecified(
+                mining.launchMission([1], [], [30, 1, 2, 3], alice, { from:alice })
+              );
+
+              await checker.setResult(true);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await expectRevert.unspecified(
+                mining.launchMission([10], [45], [12, 14, 16], carol, { from:bob })
+              );
+
+              await expectRevert.unspecified(
+                mining.launchMission([42], [], [], carol, { from:bob })
+              );
+            });
+
+            it('reverts for unowned tokens', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              await expectRevert.unspecified(
+                mining.launchMission([0], [], [], alice, { from:bob })
+              );
+
+              await expectRevert.unspecified(
+                mining.launchMission([1], [], [0, 1, 2, 3], carol, { from:carol })
+              );
+
+              await checker.setResult(true);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await expectRevert.unspecified(
+                mining.launchMission([10], [15], [12, 14, 16], carol, { from:carol })
+              );
+
+              await expectRevert.unspecified(
+                mining.launchMission([12], [], [], bob, { from:alice })
+              );
+            });
+
+            it('reverts for already-staked tokens', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              await mining.launchMission([0], [], [], alice, { from:alice });
+              await expectRevert.unspecified(
+                mining.launchMission([0], [], [], alice, { from:alice })
+              );
+
+              await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+              await expectRevert.unspecified(
+                mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice })
+              );
+
+              await checker.setResult(true);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+              await expectRevert.unspecified(
+                mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob })
+              );
+
+              await mining.launchMission([12], [], [], carol, { from:bob });
+              await expectRevert.unspecified(
+                mining.launchMission([12], [], [], carol, { from:bob })
+              );
+            });
+
+            it('reverts when paused', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              await mining.pause({ from:deployer });
+              await expectRevert(
+                mining.launchMission([0], [], [], alice, { from:alice }),
+                "Pausable: paused"
+              );
+              await mining.unpause({ from:manager });
+
+              await mining.pause({ from:manager });
+              await expectRevert(
+                mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice }),
+                "Pausable: paused"
+              );
+              await mining.unpause({ from:manager });
+              await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+
+              await checker.setResult(true);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await mining.pause({ from:deployer });
+              await expectRevert(
+                mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob }),
+                "Pausable: paused"
+              );
+              await mining.unpause({ from:deployer });
+              await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+
+              await mining.pause({ from:manager });
+              await expectRevert(
+                mining.launchMission([12], [], [], carol, { from:bob }),
+                "Pausable: paused"
+              );
+              await mining.unpause({ from:deployer });
+              await mining.launchMission([12], [], [], carol, { from:bob });
+            });
+
+            it('transfers indicated tokens into mining contract', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              await mining.launchMission([0], [], [], alice, { from:alice });
+              assert.equal(await lander.ownerOf(0), mining.address);
+              assert.equal(await lander.ownerOf(1), alice);
+
+              await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+              assert.equal(await lander.ownerOf(1), mining.address);
+              assert.equal(await lander.ownerOf(2), alice);
+              assert.equal(await payload.ownerOf(0), mining.address);
+              assert.equal(await payload.ownerOf(1), mining.address);
+              assert.equal(await payload.ownerOf(2), mining.address);
+              assert.equal(await payload.ownerOf(3), mining.address);
+              assert.equal(await payload.ownerOf(4), alice);
+
+              await checker.setResult(true);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+              assert.equal(await lander.ownerOf(10), mining.address);
+              assert.equal(await lander.ownerOf(11), bob);
+              assert.equal(await landingSite.ownerOf(15), mining.address);
+              assert.equal(await landingSite.ownerOf(16), bob);
+              assert.equal(await payload.ownerOf(12), mining.address);
+              assert.equal(await payload.ownerOf(13), bob);
+              assert.equal(await payload.ownerOf(14), mining.address);
+              assert.equal(await payload.ownerOf(15), bob);
+              assert.equal(await payload.ownerOf(16), mining.address);
+
+              await mining.launchMission([12], [], [], carol, { from:bob });
+              assert.equal(await lander.ownerOf(12), mining.address);
+              assert.equal(await lander.ownerOf(13), bob);
+            });
+
+            it('records mission details in "missionStatus" response', async () => {
+              const { mining, landingSite } = this;
+              let res;
+
+              // time-sensitive testing is iffy. Allow 1 second wiggle-room
+              const assertTimeEqual = (real, expected) => {
+                  realStr = real.toString();
+                  assert.ok(
+                    realStr == `${expected}` || realStr == `${expected + 1}`,
+                    `AssertionError: expected ${real} (as ${realStr}) to ~equal '${expected}'`
+                  );
+              }
+
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await checker.setResult(true);
+              await mining.launchMission([0], [], [], alice, { from:alice });
+              const missionTime0 = await time.latest();
+
+              res = await mining.missionStatus(0);
+              assert.equal(res.user, alice)
+              assert.equal(res.miningPower, '150')
+              assert.equal(res.staked, true)
+              assertTimeEqual(res.stakeDuration, 0)
+
+              // time-sensitive testing is iffy. Allow 1 second wiggle-room
+
+              await time.increase(14)
+              res = await mining.missionStatus(0);
+              assert.equal(res.user, alice)
+              assert.equal(res.miningPower, '150')
+              assert.equal(res.staked, true)
+              assertTimeEqual(res.stakeDuration, 14)
+
+              await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+              const missionTime1 = await time.latest();
+
+              res = await mining.missionStatus(1);
+              assert.equal(res.user, alice)
+              assert.equal(res.miningPower, '210')
+              assert.equal(res.staked, true)
+              assertTimeEqual(res.stakeDuration, 0)
+
+              await time.increase(8)
+              await checker.setResult(false);
+              await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+              const missionTime2 = await time.latest();
+
+              res = await mining.missionStatus(2);
+              assert.equal(res.user, carol)
+              assert.equal(res.miningPower, '180')
+              assert.equal(res.staked, true)
+              assertTimeEqual(res.stakeDuration, 0)
+
+              await time.increase(20)
+              await mining.launchMission([12], [], [], carol, { from:bob });
+              const missionTime3 = await time.latest();
+
+              res = await mining.missionStatus(3);
+              assert.equal(res.user, carol)
+              assert.equal(res.miningPower, '100')
+              assert.equal(res.staked, true)
+              assertTimeEqual(res.stakeDuration, 0)
+
+              await time.increase(2)
+              const t = await time.latest()
+              assertTimeEqual((await mining.missionStatus(0)).stakeDuration, t - missionTime0);
+              assertTimeEqual((await mining.missionStatus(1)).stakeDuration, t - missionTime1);
+              assertTimeEqual((await mining.missionStatus(2)).stakeDuration, t - missionTime2);
+              assertTimeEqual((await mining.missionStatus(3)).stakeDuration, t - missionTime3);
+            });
+
+            it('records transferred tokens in "missionTokens" response', async () => {
+              const { mining, lander, landingSite, payload } = this;
+              let res;
+
+              await mining.launchMission([0], [], [], alice, { from:alice });
+              res = await mining.missionTokens(0);
+              assert.deepEqual(res.landers.map(a => a.toString()), ["0"]);
+              assert.deepEqual(res.landingSites, []);
+              assert.deepEqual(res.payloads, []);
+
+              await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+              res = await mining.missionTokens(1);
+              assert.deepEqual(res.landers.map(a => a.toString()), ["1"]);
+              assert.deepEqual(res.landingSites, []);
+              assert.deepEqual(res.payloads.map(a => a.toString()), ["0", "1", "2", "3"]);
+
+              await checker.setResult(true);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+              res = await mining.missionTokens(2);
+              assert.deepEqual(res.landers.map(a => a.toString()), ["10"]);
+              assert.deepEqual(res.landingSites.map(a => a.toString()), ["15"]);
+              assert.deepEqual(res.payloads.map(a => a.toString()), ["12", "14", "16"]);
+
+              await mining.launchMission([12], [], [], carol, { from:bob });
+              res = await mining.missionTokens(3);
+              assert.deepEqual(res.landers.map(a => a.toString()), ["12"]);
+              assert.deepEqual(res.landingSites, []);
+              assert.deepEqual(res.payloads, []);
+            });
+
+            it('emits "MissionLaunched" event', async () => {
+              const { mining, lander, landingSite, payload } = this;
+              let res;
+
+              await checker.setResult(true);
+              res = await mining.launchMission([0], [], [], alice, { from:alice });
+              await expectEvent.inTransaction(res.tx, mining, "MissionLaunched", {
+                user: alice,
+                missionId: '0',
+                to: alice,
+                miningPower: '150'
+              });
+
+              res = await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+              await expectEvent.inTransaction(res.tx, mining, "MissionLaunched", {
+                user: alice,
+                missionId: '1',
+                to: alice,
+                miningPower: '210'
+              });
+
+              await checker.setResult(false);
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              res = await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+              await expectEvent.inTransaction(res.tx, mining, "MissionLaunched", {
+                user: bob,
+                missionId: '2',
+                to: carol,
+                miningPower: '180'
+              });
+
+              res = await mining.launchMission([12], [], [], carol, { from:bob });
+              await expectEvent.inTransaction(res.tx, mining, "MissionLaunched", {
+                user: bob,
+                missionId: '3',
+                to: carol,
+                miningPower: '100'
+              });
+            });
+
+            it('updates internal records as expected', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              let user, mission;
+
+              await checker.setResult(true);
+              await mining.launchMission([0], [], [], alice, { from:alice });
+              assert.equal(await mining.totalMiningPower(), '150');
+              assert.equal(await mining.missionCount(), '1');
+              assert.equal(await mining.stakedMissionCount(), '1');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.userMissionCount(alice), '1');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '150');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(0);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '150');
+
+              await checker.setResult(false);
+              await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+              // test mission 1, power 140
+              assert.equal(await mining.totalMiningPower(), '290');
+              assert.equal(await mining.missionCount(), '2');
+              assert.equal(await mining.stakedMissionCount(), '2');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '290');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(1);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '140');
+
+              await mining.setMissionLandingSiteToken(landingSite.address, { from:deployer });
+
+              await checker.setResult(true);
+              await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+              // test mission 2, power 180 * 1.5 = 270
+              assert.equal(await mining.totalMiningPower(), '560');
+              assert.equal(await mining.missionCount(), '3');
+              assert.equal(await mining.stakedMissionCount(), '3');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '1');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '270');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(2);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '270');
+
+              await checker.setResult(false);
+              await mining.launchMission([12], [], [], carol, { from:bob });
+              // test mission 3, power 100
+              assert.equal(await mining.totalMiningPower(), '660');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '370');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(3);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '100');
+            });
+          });
         });
 
         context('recallMission', () => {
@@ -942,7 +1627,7 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
             await mining.recallMission(0, alice, { from:alice });
             await expectRevert(
               mining.recallMission(0, alice, { from:alice }),
-              "IMSpaceMissionMining: mission not staked"
+              "IMSMM: mission not staked"
             );
           });
 
@@ -956,22 +1641,22 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
             await expectRevert(
               mining.recallMission(0, alice, { from:bob }),
-              "IMSpaceMissionMining: not mission controller"
+              "IMSMM: not mission controller"
             );
 
             await expectRevert(
               mining.recallMission(1, bob, { from:bob }),
-              "IMSpaceMissionMining: not mission controller"
+              "IMSMM: not mission controller"
             );
 
             await expectRevert(
               mining.recallMission(2, carol, { from:bob }),
-              "IMSpaceMissionMining: not mission controller"
+              "IMSMM: not mission controller"
             );
 
             await expectRevert(
               mining.recallMission(3, carol, { from:deployer }),
-              "IMSpaceMissionMining: not mission controller"
+              "IMSMM: not mission controller"
             );
           });
 
@@ -1259,12 +1944,12 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
             await expectRevert(
               mining.reappraiseMission(0, { from:alice }),
-              "IMSpaceMissionMining: mission not staked"
+              "IMSMM: mission not staked"
             );
 
             await expectRevert(
               mining.reappraiseMission(2, { from:carol }),
-              "IMSpaceMissionMining: mission not staked"
+              "IMSMM: mission not staked"
             );
           });
 
@@ -1727,6 +2412,1006 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
                 to: carol,
                 previousMiningPower: '100',
                 miningPower: '80'
+              });
+            });
+          });
+
+          context('with updated token appraisals and complete checker reporting accurately', () => {
+            let checker;
+
+            beforeEach(async () => {
+              const { lander, landingSite, payload, appraiser, mining, token, faucet } = this;
+
+              checker = await MockMissionChecker.new();
+
+              await mining.setMissionCompleteChecker(checker.address, { from:manager });
+
+              await appraiser.setAppraises(lander.address, true, '80', { from:deployer });
+              await appraiser.setAppraises(landingSite.address, true, '40', { from:deployer });
+              await appraiser.setAppraises(payload.address,  true, '20', { from:deployer  });
+
+              await appraiser.setAppraisals(lander.address, [0, 1, 2], [150, 200, 250], { from:deployer });
+              await appraiser.setAppraisals(landingSite.address, [15], [1000], { from:deployer });
+              await appraiser.setAppraisals(payload.address, [0, 1, 12, 13], [0, 10, 120, 130], { from:deployer });
+
+              await mining.setMissionCompleteMultiplier(10, 9, { from:deployer });
+
+              await token.mint(faucet.address, 100000000000);
+
+              // mission 0: power 100 -> 150
+              // await mining.launchMission([0], [], [], alice, { from:alice });
+
+              // mission 1: power 140 -> 250
+              // await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+
+              // mission 2: power 180 -> 1377
+              // await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+
+              // mission 3:  power 100 -> 80
+              // await mining.launchMission([12], [], [], carol, { from:bob });
+            });
+
+            it('updates internal state', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              // 100 -> 150
+              await mining.reappraiseMission(0, { from:alice });
+              assert.equal(await mining.totalMiningPower(), '570');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '290');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(0);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '150');
+
+              // 140 -> 250
+              await mining.reappraiseMission(1, { from:dave });
+              assert.equal(await mining.totalMiningPower(), '680');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '400');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(1);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '250');
+
+              // 180 -> 1377
+              await checker.setResult(true);
+              await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              assert.equal(await mining.totalMiningPower(), '1877');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '1477');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(2);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '1377');
+
+              // 100 -> 80
+              await mining.reappraiseMission(3, { from:carol });
+              assert.equal(await mining.totalMiningPower(), '1857');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '1457');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(3);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '80');
+            });
+
+            it('does not affect already-mined rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await checker.setResult(true);
+              await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1857, alice: 400, carol: 1457
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+            });
+
+            it('does not affect already-released rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet, token } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              await mining.methods["release(address,address,uint256)"](alice, alice, 400, { from:alice });
+              await mining.methods["release(address,address,uint256)"](carol, carol, 500, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              assert.equal(await token.balanceOf(alice), '400');
+              assert.equal(await token.balanceOf(carol), '500');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await checker.setResult(true);
+              await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1857, alice: 400, carol: 1457
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              await mining.release(alice, alice, { from:alice });
+              await mining.release(carol, carol, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '0');
+              assert.equal(await mining.releasable(carol), '0');
+              assert.equal(await token.balanceOf(alice), '480');
+              assert.equal(await token.balanceOf(carol), '560');
+            });
+
+            it('affects rewards mined after reappraisal', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await checker.setResult(true);
+              await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1857, alice: 400, carol: 1457
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await faucet.addOwed(mining.address, 1857);
+              assert.equal(await mining.totalMined(), '2897');
+              assert.equal(await mining.releasable(alice), '880');
+              assert.equal(await mining.releasable(carol), '2017');
+            });
+
+            it('affects rewards accumulating during "pause" after pause ends', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await mining.pause({ from:manager });
+              await faucet.addOwed(mining.address, 1857);
+              // no effect on reported mining
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await checker.setResult(true);
+              await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              await mining.reappraiseMission(3, { from:carol });
+
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await mining.unpause({ from:manager });
+              assert.equal(await mining.totalMined(), '2897');
+              assert.equal(await mining.releasable(alice), '880');
+              assert.equal(await mining.releasable(carol), '2017');
+            });
+
+            it('does not affect already-released rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet, token } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              await mining.methods["release(address,address,uint256)"](alice, alice, 400, { from:alice });
+              await mining.methods["release(address,address,uint256)"](carol, carol, 500, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              assert.equal(await token.balanceOf(alice), '400');
+              assert.equal(await token.balanceOf(carol), '500');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await checker.setResult(true);
+              await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1857, alice: 250, carol: 1457
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              await mining.release(alice, alice, { from:alice });
+              await mining.release(carol, carol, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '0');
+              assert.equal(await mining.releasable(carol), '0');
+              assert.equal(await token.balanceOf(alice), '480');
+              assert.equal(await token.balanceOf(carol), '560');
+            });
+
+            it('emits "MissionAppraised" event', async () => {
+              const { mining, lander, landingSite, payload } = this;
+              let res;
+
+              // 100 -> 150
+              res = await mining.reappraiseMission(0, { from:alice });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '0',
+                to: alice,
+                previousMiningPower: '100',
+                miningPower: '150'
+              });
+
+              // 140 -> 250
+              res = await mining.reappraiseMission(1, { from:dave });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '1',
+                to: alice,
+                previousMiningPower: '140',
+                miningPower: '250'
+              });
+
+              // 180 -> 1377
+              await checker.setResult(true);
+              res = await mining.reappraiseMission(2, { from:carol });
+              await checker.setResult(false);
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '2',
+                to: carol,
+                previousMiningPower: '180',
+                miningPower: '1377'
+              });
+
+              // 100 -> 80
+              res = await mining.reappraiseMission(3, { from:carol });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '3',
+                to: carol,
+                previousMiningPower: '100',
+                miningPower: '80'
+              });
+            });
+          });
+
+          context('with updated token appraisals and complete checker reporting "no"', () => {
+            let checker;
+
+            beforeEach(async () => {
+              const { lander, landingSite, payload, appraiser, mining, token, faucet } = this;
+
+              checker = await MockMissionChecker.new();
+
+              await mining.setMissionCompleteChecker(checker.address, { from:manager });
+
+              await appraiser.setAppraises(lander.address, true, '80', { from:deployer });
+              await appraiser.setAppraises(landingSite.address, true, '40', { from:deployer });
+              await appraiser.setAppraises(payload.address,  true, '20', { from:deployer  });
+
+              await appraiser.setAppraisals(lander.address, [0, 1, 2], [150, 200, 250], { from:deployer });
+              await appraiser.setAppraisals(landingSite.address, [15], [1000], { from:deployer });
+              await appraiser.setAppraisals(payload.address, [0, 1, 12, 13], [0, 10, 120, 130], { from:deployer });
+
+              await mining.setMissionCompleteMultiplier(10, 9, { from:deployer });
+
+              await token.mint(faucet.address, 100000000000);
+
+              // mission 0: power 100 -> 150
+              // await mining.launchMission([0], [], [], alice, { from:alice });
+
+              // mission 1: power 140 -> 250
+              // await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+
+              // mission 2: power 180 -> 1240
+              // await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+
+              // mission 3:  power 100 -> 80
+              // await mining.launchMission([12], [], [], carol, { from:bob });
+            });
+
+            it('updates internal state', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              // 100 -> 150
+              await mining.reappraiseMission(0, { from:alice });
+              assert.equal(await mining.totalMiningPower(), '570');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '290');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(0);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '150');
+
+              // 140 -> 250
+              await mining.reappraiseMission(1, { from:dave });
+              assert.equal(await mining.totalMiningPower(), '680');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '400');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(1);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '250');
+
+              // 180 -> 1240
+              await mining.reappraiseMission(2, { from:carol });
+              assert.equal(await mining.totalMiningPower(), '1740');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '1340');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(2);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '1240');
+
+              // 100 -> 80
+              await mining.reappraiseMission(3, { from:carol });
+              assert.equal(await mining.totalMiningPower(), '1720');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '1320');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(3);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '80');
+            });
+
+            it('does not affect already-mined rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1720, alice: 400, carol: 1320
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+            });
+
+            it('does not affect already-released rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet, token } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              await mining.methods["release(address,address,uint256)"](alice, alice, 400, { from:alice });
+              await mining.methods["release(address,address,uint256)"](carol, carol, 500, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              assert.equal(await token.balanceOf(alice), '400');
+              assert.equal(await token.balanceOf(carol), '500');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1720, alice: 400, carol: 1320
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              await mining.release(alice, alice, { from:alice });
+              await mining.release(carol, carol, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '0');
+              assert.equal(await mining.releasable(carol), '0');
+              assert.equal(await token.balanceOf(alice), '480');
+              assert.equal(await token.balanceOf(carol), '560');
+            });
+
+            it('affects rewards mined after reappraisal', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1720, alice: 400, carol: 1320
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await faucet.addOwed(mining.address, 1720);
+              assert.equal(await mining.totalMined(), '2760');
+              assert.equal(await mining.releasable(alice), '880');
+              assert.equal(await mining.releasable(carol), '1880');
+            });
+
+            it('affects rewards accumulating during "pause" after pause ends', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await mining.pause({ from:manager });
+              await faucet.addOwed(mining.address, 1720);
+              // no effect on reported mining
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await mining.unpause({ from:manager });
+              assert.equal(await mining.totalMined(), '2760');
+              assert.equal(await mining.releasable(alice), '880');
+              assert.equal(await mining.releasable(carol), '1880');
+            });
+
+            it('does not affect already-released rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet, token } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              await mining.methods["release(address,address,uint256)"](alice, alice, 400, { from:alice });
+              await mining.methods["release(address,address,uint256)"](carol, carol, 500, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              assert.equal(await token.balanceOf(alice), '400');
+              assert.equal(await token.balanceOf(carol), '500');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1720, alice: 250, carol: 1320
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              await mining.release(alice, alice, { from:alice });
+              await mining.release(carol, carol, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '0');
+              assert.equal(await mining.releasable(carol), '0');
+              assert.equal(await token.balanceOf(alice), '480');
+              assert.equal(await token.balanceOf(carol), '560');
+            });
+
+            it('emits "MissionAppraised" event', async () => {
+              const { mining, lander, landingSite, payload } = this;
+              let res;
+
+              // 100 -> 150
+              res = await mining.reappraiseMission(0, { from:alice });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '0',
+                to: alice,
+                previousMiningPower: '100',
+                miningPower: '150'
+              });
+
+              // 140 -> 250
+              res = await mining.reappraiseMission(1, { from:dave });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '1',
+                to: alice,
+                previousMiningPower: '140',
+                miningPower: '250'
+              });
+
+              // 180 -> 1240
+              res = await mining.reappraiseMission(2, { from:carol });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '2',
+                to: carol,
+                previousMiningPower: '180',
+                miningPower: '1240'
+              });
+
+              // 100 -> 80
+              res = await mining.reappraiseMission(3, { from:carol });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '3',
+                to: carol,
+                previousMiningPower: '100',
+                miningPower: '80'
+              });
+            });
+          });
+
+          context('with updated token appraisals and complete checker reporting "yes"', () => {
+            let checker;
+
+            beforeEach(async () => {
+              const { lander, landingSite, payload, appraiser, mining, token, faucet } = this;
+
+              checker = await MockMissionChecker.new();
+
+              await mining.setMissionCompleteChecker(checker.address, { from:manager });
+              await checker.setResult(true);
+
+              await appraiser.setAppraises(lander.address, true, '80', { from:deployer });
+              await appraiser.setAppraises(landingSite.address, true, '40', { from:deployer });
+              await appraiser.setAppraises(payload.address,  true, '20', { from:deployer  });
+
+              await appraiser.setAppraisals(lander.address, [0, 1, 2], [150, 200, 250], { from:deployer });
+              await appraiser.setAppraisals(landingSite.address, [15], [1000], { from:deployer });
+              await appraiser.setAppraisals(payload.address, [0, 1, 12, 13], [0, 10, 120, 130], { from:deployer });
+
+              await mining.setMissionCompleteMultiplier(10, 9, { from:deployer });
+
+              await token.mint(faucet.address, 100000000000);
+
+              // mission 0: power 100 -> 166 (150)
+              // await mining.launchMission([0], [], [], alice, { from:alice });
+
+              // mission 1: power 140 -> 277 (250)
+              // await mining.launchMission([1], [], [0, 1, 2, 3], alice, { from:alice });
+
+              // mission 2: power 180 -> 1377 (1377)
+              // await mining.launchMission([10], [15], [12, 14, 16], carol, { from:bob });
+
+              // mission 3:  power 100 -> 88 (80)
+              // await mining.launchMission([12], [], [], carol, { from:bob });
+            });
+
+            it('updates internal state', async () => {
+              const { mining, lander, landingSite, payload } = this;
+
+              // 100 -> 166 (150)
+              await mining.reappraiseMission(0, { from:alice });
+              assert.equal(await mining.totalMiningPower(), '586');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '306');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(0);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '166');
+
+              // 140 -> 277 (250)
+              await mining.reappraiseMission(1, { from:dave });
+              assert.equal(await mining.totalMiningPower(), '723');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(alice);
+              assert.equal(user.miningPower, '443');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(1);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, alice);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '277');
+
+              // 180 -> 1377
+              await mining.reappraiseMission(2, { from:carol });
+              assert.equal(await mining.totalMiningPower(), '1920');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '1477');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(2);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '0');
+              assert.equal(mission.miningPower, '1377');
+
+              // 100 -> 88 (80)
+              await mining.reappraiseMission(3, { from:carol });
+              assert.equal(await mining.totalMiningPower(), '1908');
+              assert.equal(await mining.missionCount(), '4');
+              assert.equal(await mining.stakedMissionCount(), '4');
+              assert.equal(await mining.stakedMissions(0), '0');
+              assert.equal(await mining.stakedMissions(1), '1');
+              assert.equal(await mining.stakedMissions(2), '2');
+              assert.equal(await mining.stakedMissions(3), '3');
+              assert.equal(await mining.userMissionCount(alice), '2');
+              assert.equal(await mining.userMissionCount(carol), '2');
+              assert.equal(await mining.userMissions(alice, 0), '0');
+              assert.equal(await mining.userMissions(alice, 1), '1');
+              assert.equal(await mining.userMissions(carol, 0), '2');
+              assert.equal(await mining.userMissions(carol, 1), '3');
+
+              user = await mining.userInfo(carol);
+              assert.equal(user.miningPower, '1465');
+              assert.equal(user.released, '0');
+
+              mission = await mining.missionInfo(3);
+              assert.equal(mission.staked, true);
+              assert.equal(mission.user, carol);
+              assert.equal(mission.userMissionsIndex, '1');
+              assert.equal(mission.miningPower, '88');
+            });
+
+            it('does not affect already-mined rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1720, alice: 400, carol: 1320
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+            });
+
+            it('does not affect already-released rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet, token } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              await mining.methods["release(address,address,uint256)"](alice, alice, 400, { from:alice });
+              await mining.methods["release(address,address,uint256)"](carol, carol, 500, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              assert.equal(await token.balanceOf(alice), '400');
+              assert.equal(await token.balanceOf(carol), '500');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1720, alice: 400, carol: 1320
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              await mining.release(alice, alice, { from:alice });
+              await mining.release(carol, carol, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '0');
+              assert.equal(await mining.releasable(carol), '0');
+              assert.equal(await token.balanceOf(alice), '480');
+              assert.equal(await token.balanceOf(carol), '560');
+            });
+
+            it('affects rewards mined after reappraisal', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1908, alice: 443, carol: 1465
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await faucet.addOwed(mining.address, 1908);
+              assert.equal(await mining.totalMined(), '2948');
+              assert.equal(await mining.releasable(alice), '923');
+              assert.equal(await mining.releasable(carol), '2025');
+            });
+
+            it('affects rewards accumulating during "pause" after pause ends', async () => {
+              const { mining, lander, landingSite, payload, faucet } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await mining.pause({ from:manager });
+              await faucet.addOwed(mining.address, 1908);
+              // no effect on reported mining
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1908, alice: 443, carol: 1465
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '480');
+              assert.equal(await mining.releasable(carol), '560');
+
+              await mining.unpause({ from:manager });
+              assert.equal(await mining.totalMined(), '2948');
+              assert.equal(await mining.releasable(alice), '923');
+              assert.equal(await mining.releasable(carol), '2025');
+            });
+
+            it('does not affect already-released rewards', async () => {
+              const { mining, lander, landingSite, payload, faucet, token } = this;
+
+              // total: 520, alice: 240, carol; 280
+              await faucet.setOwed(mining.address, 1040);
+              await mining.methods["release(address,address,uint256)"](alice, alice, 400, { from:alice });
+              await mining.methods["release(address,address,uint256)"](carol, carol, 500, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              assert.equal(await token.balanceOf(alice), '400');
+              assert.equal(await token.balanceOf(carol), '500');
+
+              // reappraise
+              await mining.reappraiseMission(0, { from:alice });
+              await mining.reappraiseMission(1, { from:dave });
+              await mining.reappraiseMission(2, { from:carol });
+              await mining.reappraiseMission(3, { from:carol });
+
+              // total: 1908, alice: 443, carol: 1465
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '80');
+              assert.equal(await mining.releasable(carol), '60');
+              await mining.release(alice, alice, { from:alice });
+              await mining.release(carol, carol, { from:carol });
+              assert.equal(await mining.totalMined(), '1040');
+              assert.equal(await mining.releasable(alice), '0');
+              assert.equal(await mining.releasable(carol), '0');
+              assert.equal(await token.balanceOf(alice), '480');
+              assert.equal(await token.balanceOf(carol), '560');
+            });
+
+            it('emits "MissionAppraised" event', async () => {
+              const { mining, lander, landingSite, payload } = this;
+              let res;
+
+              // 100 -> 150
+              res = await mining.reappraiseMission(0, { from:alice });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '0',
+                to: alice,
+                previousMiningPower: '100',
+                miningPower: '166'
+              });
+
+              // 140 -> 250
+              res = await mining.reappraiseMission(1, { from:dave });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '1',
+                to: alice,
+                previousMiningPower: '140',
+                miningPower: '277'
+              });
+
+              // 180 -> 1240
+              res = await mining.reappraiseMission(2, { from:carol });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '2',
+                to: carol,
+                previousMiningPower: '180',
+                miningPower: '1377'
+              });
+
+              // 100 -> 80
+              res = await mining.reappraiseMission(3, { from:carol });
+              await expectEvent.inTransaction(res.tx, mining, "MissionAppraised", {
+                missionId: '3',
+                to: carol,
+                previousMiningPower: '100',
+                miningPower: '88'
               });
             });
           });
@@ -3466,22 +5151,22 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
             await expectRevert(
               mining.methods["release(address,address)"](bob, alice, { from:alice }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
 
             await expectRevert(
               mining.methods["release(address,address)"](alice, alice, { from:bob }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
 
             await expectRevert(
               mining.methods["release(address,address)"](alice, alice, { from:deployer }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
 
             await expectRevert(
               mining.methods["release(address,address)"](carol, carol, { from:manager }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
           });
 
@@ -3675,22 +5360,22 @@ contract('IMSpaceMissionMining', ([alice, bob, carol, dave, deployer, manager]) 
 
             await expectRevert(
               mining.methods["release(address,address,uint256)"](bob, alice, 100, { from:alice }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
 
             await expectRevert(
               mining.methods["release(address,address,uint256)"](alice, alice, 500, { from:bob }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
 
             await expectRevert(
               mining.methods["release(address,address,uint256)"](alice, alice, 0, { from:deployer }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
 
             await expectRevert(
               mining.methods["release(address,address,uint256)"](carol, carol, 1, { from:manager }),
-              "IMSpaceMissionMining: not authorized"
+              "IMSMM: !auth"
             );
           });
 

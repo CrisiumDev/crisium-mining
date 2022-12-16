@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/AccessControlEnumerable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/utils/Context.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import "./IMissionChecker.sol";
 import "../faucet/IERC20Faucet.sol";
 import "../appraisal/INFTAppraiser.sol";
 
@@ -85,6 +86,8 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     IERC20Faucet public immutable faucet;
     /// @notice Address of mission appraiser and mission tokens
     INFTAppraiser public appraiser;
+    /// @notice Address of mission completeness checker (if zero, default check used)
+    IMissionChecker public completeMissionChecker;
     uint256 private completeMissionMultiplierPrec = PRECISION;
 
     /// @notice Info of each current and former mission staker
@@ -101,6 +104,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     event MissionRecalled(address user, uint256 indexed missionId, address indexed to, uint256 miningPower);
     event MissionAppraised(uint256 indexed missionId, address indexed to, uint256 previousMiningPower, uint256 miningPower);
     event MissionAppraiserChanged(address indexed previousAppraiser, address indexed appraiser);
+    event MissionCompleteCheckerChanged(address indexed previousChecker, address checker);
     event MissionCompleteMultiplierUpdated(uint256 numerator, uint256 denominator);
 
     /// @param _token The reward token address
@@ -112,7 +116,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         appraiser = _appraiser;
 
         // require a contract for _token, as low-level "call" is used
-        require(_token.code.length > 0, "IMSpaceMissionMining: _token not a contract");
+        require(_token.code.length > 0, "IMSMM: _token not a contract");
 
         // set up roles
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());   // admin; can add/remove managers
@@ -167,14 +171,12 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
      * from the IERC20Faucet interface.
      */
     function release(address from, address to) external override returns (uint256 amount) {
-        require(_msgSender() == from, "IMSpaceMissionMining: not authorized");
+        require(_msgSender() == from, "IMSMM: !auth");
         update();
 
         // calculate reward pending
         UserInfo storage user = userInfo[from];
-        amount = (
-            ((user.miningPower * accRewardPerMP)  / PRECISION).toInt256() - user.rewardDebt
-        ).toUint256();
+        amount = _releaseAmount(user);
 
         _release(user, from, to, amount);
     }
@@ -187,19 +189,34 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
      * from the IERC20Faucet interface.
      */
     function release(address from, address to, uint256 amount) external override {
-        require(_msgSender() == from, "IMSpaceMissionMining: not authorized");
+        require(_msgSender() == from, "IMSMM: !auth");
         update();
 
         // calculate reward pending
         UserInfo storage user = userInfo[from];
-        uint256 pendingReward = (
-            ((user.miningPower * accRewardPerMP)  / PRECISION).toInt256() - user.rewardDebt
-        ).toUint256();
+        uint256 pendingReward = _releaseAmount(user);
 
-        require(amount <= pendingReward, "IMSpaceMissionMining: amount > releasable");
+        require(amount <= pendingReward, "IMSMM: amount > releasable");
         _release(user, from, to, amount);
     }
 
+    /**
+     * Calculate and return the reward amount that could be released for this
+     * user at the present moment (without fetching more tokens from the faucet).
+     */
+    function _releaseAmount(UserInfo storage user) internal view returns (uint256) {
+        return (
+            ((user.miningPower * accRewardPerMP)  / PRECISION).toInt256() - user.rewardDebt
+        ).toUint256();
+    }
+
+    /**
+     * Release the indicated token quantity from the indicated user, transferring
+     * it to `to`.
+     *
+     * Precondition: `amount` is no more than `releaseAmount(user)`, the reward
+     * available to that user at this time.
+     */
     function _release(UserInfo storage user, address from, address to, uint256 amount) internal {
         // update internal records
         user.rewardDebt += amount.toInt256();
@@ -270,12 +287,23 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     }
 
     /**
+     * @notice Updates the IMissionChecker address used to check for mission completeness.
+     * Complete missions receive a mining bonus, applied as a multiplier against
+     *
+     */
+    function setMissionCompleteChecker(IMissionChecker _checker) external onlyManager {
+        address previousChecker = address(completeMissionChecker);
+        completeMissionChecker = address(_checker) == address(this) ? IMissionChecker(address(0)) : _checker;
+        emit MissionCompleteCheckerChanged(previousChecker, address(completeMissionChecker));
+    }
+
+    /**
      * @notice Updates the mining power multiplier applied to "complete" missions,
      * those which have at least one of each component type. Only callable by a manager.
      * Does not automatically update the mining power of currently-staked missions.
      */
     function setMissionCompleteMultiplier(uint256 numerator, uint256 denominator) external onlyManager {
-        require(numerator >= denominator, "IMSpaceMissionMining: ratio not >= 1");
+        require(numerator >= denominator, "IMSMM: ratio not >= 1");
         completeMissionMultiplierPrec = (numerator * PRECISION) / denominator;
         emit MissionCompleteMultiplierUpdated(numerator, denominator);
     }
@@ -315,12 +343,12 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
     }
 
     modifier onlyManager() {
-        require(hasRole(MANAGER_ROLE, _msgSender()), "IMSpaceMissionMining: not authorized");
+        require(hasRole(MANAGER_ROLE, _msgSender()), "IMSMM: !auth");
         _;
     }
 
     modifier onlyUnset(address addr) {
-        require(addr == address(0), "IMSpaceMissionMining: already set");
+        require(addr == address(0), "IMSMM: already set");
         _;
     }
 
@@ -429,20 +457,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         if (valid) {
             // mining power is the sum of all component tokens, scaled by a multiplier
             // if complete.
-            miningPower += landers.length > 0
-                ? appraiser.totalAppraisalOf(landerToken, landers)
-                : 0;
-            miningPower += landingSites.length > 0
-                ? appraiser.totalAppraisalOf(landingSiteToken, landingSites)
-                : 0;
-            miningPower += payloads.length > 0
-                ? appraiser.totalAppraisalOf(payloadToken, payloads)
-                : 0;
-
-            if (landers.length > 0 && landingSites.length > 0 && payloads.length > 0) {
-                // mission is complete
-                miningPower = (miningPower * completeMissionMultiplierPrec) / PRECISION;
-            }
+            miningPower = _getMissionAppraisal(landers, landingSites, payloads);
         }
     }
 
@@ -458,38 +473,71 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         MissionInfo storage mission = missionInfo[missionId];
         UserInfo storage user = userInfo[mission.user];
 
-        require(mission.staked, "IMSpaceMissionMining: mission not staked");
+        require(mission.staked, "IMSMM: mission not staked");
 
         update();
 
-        appraisal = _getMissionAppraisal(mission);
         uint256 previousAppraisal = mission.miningPower;
-        int256 appraisalChange = appraisal.toInt256() - previousAppraisal.toInt256();
-
-        user.miningPower = (user.miningPower + appraisal) - previousAppraisal;
-        user.rewardDebt += (appraisalChange * accRewardPerMP.toInt256()) / PRECISION.toInt256();
-
-        mission.miningPower = appraisal;
-        totalMiningPower = (totalMiningPower.toInt256() + appraisalChange).toUint256();
+        appraisal = _getMissionAppraisal(mission.landers, mission.landingSites, mission.payloads);
+        _applyAppraisal(mission, user, appraisal);
         emit MissionAppraised(missionId, mission.user, previousAppraisal, appraisal);
     }
 
-    function _getMissionAppraisal(MissionInfo storage mission) internal view returns (uint256 miningPower) {
+    function _getMissionAppraisal(
+        uint256[] memory landers,
+        uint256[] memory landingSites,
+        uint256[] memory payloads
+    ) internal view returns (uint256 miningPower) {
         // mining power is the sum of all component tokens, scaled by a multiplier
         // if complete.
-        miningPower += mission.landers.length > 0
-            ? appraiser.totalAppraisalOf(landerToken, mission.landers)
-            : 0;
-        miningPower += mission.landingSites.length > 0
-            ? appraiser.totalAppraisalOf(landingSiteToken, mission.landingSites)
-            : 0;
-        miningPower += mission.payloads.length > 0
-            ? appraiser.totalAppraisalOf(payloadToken, mission.payloads)
-            : 0;
+        miningPower = (
+            _getTokenAppraisal(landerToken, landers) +
+            _getTokenAppraisal(landingSiteToken, landingSites) +
+            _getTokenAppraisal(payloadToken, payloads)
+        );
 
-        if (mission.landers.length > 0 && mission.landingSites.length > 0 && mission.payloads.length > 0) {
-            // mission is complete
+        if (_isMissionComplete(landers, landingSites, payloads)) {
             miningPower = (miningPower * completeMissionMultiplierPrec) / PRECISION;
+        }
+    }
+
+    function _applyAppraisal(MissionInfo storage mission, UserInfo storage user, uint256 appraisal) internal {
+        uint256 previousAppraisal = mission.miningPower;
+        int256 appraisalChange = appraisal.toInt256() - previousAppraisal.toInt256();
+
+        mission.miningPower = appraisal;
+
+        if (mission.staked) {
+            user.miningPower = (user.miningPower + appraisal) - previousAppraisal;
+            user.rewardDebt += (appraisalChange * accRewardPerMP.toInt256()) / PRECISION.toInt256();
+            totalMiningPower = (totalMiningPower.toInt256() + appraisalChange).toUint256();
+        }
+    }
+
+    function _getTokenAppraisal(address _token, uint256[] memory _tokenIds) internal view returns (uint256 miningPower) {
+        miningPower = _tokenIds.length > 0
+            ? appraiser.totalAppraisalOf(_token, _tokenIds)
+            : 0;
+    }
+
+    function _isMissionComplete(
+        uint256[] memory landers,
+        uint256[] memory landingSites,
+        uint256[] memory payloads
+    ) internal view returns (bool complete) {
+        // if a completeness checker is set, defer to it. Otherwise simply
+        // verify that at least one of each token type is provided.
+        if (address(completeMissionChecker) != address(0)) {
+            return completeMissionChecker.checkMission(
+                landerToken,
+                landers,
+                landingSiteToken,
+                landingSites,
+                payloadToken,
+                payloads
+            );
+        } else {
+            return landers.length > 0 && landingSites.length > 0 && payloads.length > 0;
         }
     }
 
@@ -509,14 +557,14 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         update();
 
         (bool valid, uint256 miningPower) = evaluateMissionCandidate(landers, landingSites, payloads);
-        require(valid, "IMSpaceMissionMining: invalid mission");
+        require(valid, "IMSMM: invalid mission");
 
         // Make a mission
         missionId = missionInfo.length;
         missionInfo.push(MissionInfo({
             // mission details
             user: to,
-            miningPower: miningPower,
+            miningPower: 0,
             userMissionsIndex: userMissions[to].length,
             stakedMissionsIndex: stakedMissions.length,
             landers: landers,
@@ -536,9 +584,7 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         UserInfo storage user = userInfo[to];
 
         // Update mining power totals
-        user.miningPower += miningPower;
-        user.rewardDebt += ((miningPower * accRewardPerMP) / PRECISION).toInt256();
-        totalMiningPower += miningPower;
+        _applyAppraisal(mission, user, miningPower);
 
         // Transfer mission tokens
         _transferMissionNFTs(mission, _msgSender(), address(this));
@@ -557,8 +603,8 @@ contract IMSpaceMissionMining is Context, AccessControlEnumerable, Pausable, IER
         MissionInfo storage mission = missionInfo[missionId];
         UserInfo storage user = userInfo[mission.user];
 
-        require(mission.staked, "IMSpaceMissionMining: mission not staked");
-        require(_msgSender() == mission.user, "IMSpaceMissionMining: not mission controller");
+        require(mission.staked, "IMSMM: mission not staked");
+        require(_msgSender() == mission.user, "IMSMM: not mission controller");
 
         update();
 
